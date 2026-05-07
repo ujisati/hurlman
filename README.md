@@ -141,6 +141,16 @@ tsx node_modules/.bin/hurlman run -- foo.hurl
 
 Hurlman itself does not bundle a TS loader.
 
+## Agent Skill
+
+A skill for AI coding agents is bundled in this package. Install it with:
+
+```bash
+npx skills add ujisati/hurlman
+```
+
+This teaches your agent how to work in a hurlman project — running hurl files, editing env files, composing environments, and managing the cache.
+
 ## License
 
 MIT

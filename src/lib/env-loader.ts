@@ -1,46 +1,86 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type { EnvModule, SetterRecord, Variable } from '../types.js';
 
-function parseEnvFile(content: string): Record<string, string> {
-  const vars: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim().toLowerCase();
-    let value = trimmed.slice(eqIdx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    vars[key] = value;
-  }
-  return vars;
+export interface ResolvedEnv {
+  variables: Record<string, string>;
+  setters: Record<string, SetterRecord>;
 }
 
-export function loadEnvs(
+const ENV_EXTENSIONS = ['.js', '.mjs', '.cjs'];
+
+function resolveEnvPath(envsDir: string, name: string): string {
+  for (const ext of ENV_EXTENSIONS) {
+    const candidate = path.resolve(envsDir, `${name}${ext}`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `Environment file not found: ${path.resolve(envsDir, name)}.{js,mjs,cjs}`,
+  );
+}
+
+async function loadEnvModule(filePath: string): Promise<EnvModule> {
+  const url = pathToFileURL(filePath).href;
+  let mod: { default?: unknown } & Record<string, unknown>;
+  try {
+    mod = (await import(url)) as { default?: unknown } & Record<string, unknown>;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load env file ${filePath}: ${msg}`);
+  }
+
+  const candidate = (mod.default ?? mod) as unknown;
+  if (!candidate || typeof candidate !== 'object') {
+    throw new Error(
+      `Env file ${filePath} must export an EnvModule object (default export)`,
+    );
+  }
+  return candidate as EnvModule;
+}
+
+function isSetterRecord(value: unknown): value is SetterRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { produce?: unknown }).produce === 'function'
+  );
+}
+
+export async function loadEnvs(
   envNames: string[],
   envsDir: string,
-): Record<string, string> {
-  const names = envNames.length > 0 ? envNames : ['default'];
-  const resolved: Record<string, string> = {};
+): Promise<ResolvedEnv> {
+  const names = ['default', ...envNames];
+  const merged: Record<string, Variable> = {};
+  const lastOrigin: Record<string, string> = {};
 
   for (const name of names) {
-    const filePath = path.resolve(envsDir, `${name}.env`);
-    if (!fs.existsSync(filePath)) {
-      throw new Error(
-        `Environment file not found: ${filePath}`,
-      );
+    const filePath = resolveEnvPath(envsDir, name);
+    const mod = await loadEnvModule(filePath);
+    const vars = mod.variables ?? {};
+    if (typeof vars !== 'object' || vars === null) {
+      throw new Error(`Env file ${filePath}: "variables" must be an object`);
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const vars = parseEnvFile(content);
     for (const [k, v] of Object.entries(vars)) {
-      resolved[k] = v;
+      merged[k] = v;
+      lastOrigin[k] = filePath;
     }
   }
 
-  return resolved;
+  const variables: Record<string, string> = {};
+  const setters: Record<string, SetterRecord> = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (typeof value === 'string') {
+      variables[key] = value;
+    } else if (isSetterRecord(value)) {
+      setters[key] = value;
+    } else {
+      throw new Error(
+        `Variable "${key}" (last set in ${lastOrigin[key]}) must be a string or a SetterRecord with a produce() function`,
+      );
+    }
+  }
+
+  return { variables, setters };
 }

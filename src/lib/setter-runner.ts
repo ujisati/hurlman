@@ -55,7 +55,6 @@ async function safeProduce(
     return await produce(env);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error in setter '${name}': ${msg}`);
-    process.exit(1);
+    throw new Error(`Setter '${name}' failed: ${msg}`);
   }
 }

@@ -7,8 +7,10 @@ export interface SetterRecord {
   fingerprint?: (env: Record<string, string>) => string;
 }
 
-export interface SetterModule {
-  default: Record<string, SetterRecord>;
+export type Variable = string | SetterRecord;
+
+export interface EnvModule {
+  variables?: Record<string, Variable>;
 }
 
 export interface CacheEntry {
@@ -19,5 +21,3 @@ export interface CacheEntry {
 export interface CacheFile {
   [key: string]: CacheEntry;
 }
-
-

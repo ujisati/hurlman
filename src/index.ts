@@ -12,8 +12,7 @@ program.name('hurlman').version('0.1.0');
 
 program
   .command('init')
-  .description('Bootstrap a new project with the expected file layout')
-  .option('--setters-path <path>', 'Path to setters file', 'runner/setters.ts')
+  .description('Bootstrap a new project with envs/default.js')
   .option('--envs-dir <path>', 'Path to envs directory', 'envs')
   .option('--force', 'Overwrite existing files')
   .action((opts) => initCommand(opts));
@@ -26,7 +25,6 @@ program
       'hurlman run --env staging -- foo.hurl --test --very-verbose',
   )
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
-  .option('--setters-path <path>', 'Path to setters file')
   .option('--envs-dir <path>', 'Path to envs directory')
   .action((hurlArgs: string[], opts) => {
     if (!hurlArgs || hurlArgs.length === 0) {
@@ -39,7 +37,6 @@ program
     runCommand({
       env: opts.env,
       hurlArgs,
-      settersPath: opts.settersPath,
       envsDir: opts.envsDir,
     });
   });
@@ -48,7 +45,6 @@ program
   .command('env')
   .description('Print the resolved hurl-variable map')
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
-  .option('--setters-path <path>', 'Path to setters file')
   .option('--envs-dir <path>', 'Path to envs directory')
   .action((opts) => envCommand(opts));
 

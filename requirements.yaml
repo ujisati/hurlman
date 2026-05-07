@@ -1,231 +1,216 @@
 package:
   name: hurlman
   purpose: >
-    A thin CLI wrapper around hurl that adds environment composition, computed
-    variable injection (with persistent caching), and configurable per-request
-    logging. Lets a project run hurl files via "npx hurlman run ..." without
-    sourcing shell scripts, and lets users declare token-minting /
-    value-fetching logic in a single setters file instead of an imperative
-    bootstrap script.
+    A thin CLI wrapper around hurl that adds environment composition and
+    computed-variable injection (with persistent caching). Lets a project
+    run hurl files via "npx hurlman run -- ..." without sourcing shell
+    scripts, and lets users declare token-minting / value-fetching logic
+    inline alongside their static config.
   distribution: >-
     Published npm package. Exposes bin "hurlman". Written in TypeScript,
-    compiled to JS for distribution.
+    compiled to JS for distribution. Hurlman itself ships as CommonJS;
+    user env files may be ESM (.js with type:module, .mjs) or CJS (.js
+    without type:module, .cjs) — node natively dispatches.
   invocation:
     - "All commands run via: npx hurlman <subcommand> [args]."
-    - "init is the one-shot project setup; everything else (run, env, cache) is
-      day-to-day use."
+    - "init is the one-shot project setup; everything else (run, env,
+      cache) is day-to-day use."
     - >-
-      Hurlman flags (--env, --setters-path, --envs-dir) come first. A literal
-      "--" separator MUST precede all arguments destined for hurl. Everything
-      after "--" is passed to hurl verbatim. This is a hard boundary — no
-      auto-detection, no overlap, no ambiguity. Example:
+      Hurlman flags (--env, --envs-dir) come first. A literal "--"
+      separator MUST precede all arguments destined for hurl. Everything
+      after "--" is passed to hurl verbatim. This is a hard boundary —
+      no auto-detection, no overlap, no ambiguity. Example:
       "hurlman run --env staging -- foo.hurl --test --very-verbose".
   non_goals:
     - "Replacing hurl's syntax, assertion engine, or test discovery."
     - "Tag systems (use --glob and directory layout instead)."
     - "Folder-scoped variable scopes (variables are flat / global per run)."
     - >-
-      Shipping any specific token producers — token logic is user code, declared
-      in the project's setters file. The package provides the contract, not the
-      implementations.
+      Shipping any specific token producers — token logic is user code,
+      declared inline in env files. The package provides the contract,
+      not the implementations.
+    - "Formatting, capturing, or interpreting hurl's output. Hurl owns
+      stdout/stderr completely."
 
 dependencies:
   runtime:
     - "commander — subcommand + flag parsing."
-    - "Simple console output for init (no heavy UI dependencies)."
-    - "Any token-fetching libs (jsonwebtoken, axios, etc.) are added by the
-      user's project as needed by their setters."
   peer:
-    - "hurl >= 4.0 must be installed and on PATH."
+    - "hurl >= 4.0 must be installed and on PATH (verified at runtime,
+      not declared as an npm peerDependency since hurl is not on npm)."
+
+env_module:
+  intent: >-
+    The user's project declares its environments as JavaScript modules.
+    Each env module exports a single "variables" map whose entries are
+    either literal strings (static config) or SetterRecord objects
+    (computed values). One file per env. No separate setters file.
+  file_format:
+    location: "envs/<name>.{js,mjs,cjs}. Loader resolves extensions in
+      that priority. envs/default.<ext> is required."
+    syntax: >-
+      ESM (export default) or CommonJS (module.exports). Choice depends on
+      the user's package.json "type" field. Init writes ESM if the user
+      has type:module (or no package.json), otherwise CJS. JSDoc
+      `/** @type {import('hurlman').EnvModule} */` works in both.
+    shape: |
+      EnvModule = { variables?: Record<string, string | SetterRecord> }
+      SetterRecord = {
+        produce: (env: Record<string,string>) => string | Promise<string>,
+        cacheable?: boolean,        // default false
+        ttlMs?: number,             // default 3600000 (1 hour)
+        validator?: (value: string) => boolean,
+        secret?: boolean,           // default false (use --secret if true)
+        fingerprint?: (env: Record<string,string>) => string,  // default () => ''
+      }
+  composition:
+    - >-
+      envs/default.<ext> ALWAYS loads first as the base layer. Required;
+      missing → clear error.
+    - >-
+      "--env a --env b" loads a, then b, on top of default in that order.
+      Each named env is required; missing → clear error.
+    - >-
+      Merge rule: shallow-merge "variables" by key, last write wins. The
+      same key in multiple files is allowed and resolves cleanly — no
+      warnings.
+    - >-
+      Static and computed variables share one namespace. A later env can
+      replace a setter with a literal string (and vice versa) by simply
+      writing to the same key.
+  discrimination:
+    - "After all envs are merged, each entry is classified:"
+    - "  typeof v === 'string' → static literal."
+    - "  v && typeof v === 'object' && typeof v.produce === 'function'
+      → setter."
+    - "  anything else → throw, naming the variable and its origin file."
+  setter_env_argument: >-
+    `produce(env)` and `fingerprint(env)` receive the merged static
+    variables map ONLY. Other setters' computed values are NOT visible.
+    No setter chaining — keeps cache invalidation simple.
+  worked_example: |
+    A common pattern: declare a setter once in default.js and let each
+    named env supply its own inputs through static variables.
+
+    // envs/default.js
+    export default {
+      variables: {
+        base_url: 'https://default.example.com',
+        client_id: 'default-app',
+        api_token: {
+          produce: (env) => signJwt(env.client_id, env.base_url),
+          cacheable: true,
+          fingerprint: (env) => `${env.client_id}@${env.base_url}`,
+          secret: true,
+        },
+      },
+    };
+
+    // envs/staging.js — only the inputs differ
+    export default {
+      variables: {
+        base_url: 'https://staging.example.com',
+        client_id: 'staging-app',
+      },
+    };
+
+    On `--env staging`, hurlman merges variables, then runs the setter
+    from default with staging's base_url + client_id. The fingerprint
+    encodes the inputs so each env gets its own cache entry.
+  error_handling: >-
+    If `produce()` throws during run or env, hurlman writes the error
+    (including the setter key) to stderr and aborts with exit code 1.
+    Failures must be visible — no silent retries or fallbacks.
 
 subcommands:
 
   init:
     purpose: >
-      Bootstrap a new project with the expected file layout. Pure scaffolding —
-      does not modify .gitignore, package.json, or any existing project files.
-      Wires nothing; the user is responsible for adding npm scripts and
-      .gitignore entries if desired.
+      Bootstrap a new project with envs/default.js. Pure scaffolding —
+      does not modify .gitignore, package.json, or any other existing
+      file.
     behavior:
-      - "Checks that hurl is on PATH before doing anything; exits with a clear
-        error if absent."
-      - "Uses plain console output for progress messages."
-      - "Creates envs/ directory."
-      - "Creates envs/default.env as a stub with a comment explaining the
-        format."
-      - >-
-        Creates runner/setters.ts (path configurable) with a documented stub
-        export — empty object plus two example commented-out setters (one with
-        fingerprint, one without).
-      - >-
-        Creates scripts/README.md explaining how to compose npx hurlman run
-        calls from bash scripts.
-      - >-
-        Idempotent: re-running detects existing files and skips with a message
-        instead of overwriting.
+      - "Checks that hurl is on PATH; exits with a clear error if absent."
+      - "Detects the user's package.json `type` field. Writes the ESM
+        template if `type: module` (or no package.json), otherwise CJS."
+      - "Creates envs/ directory and envs/default.js with a stub
+        EnvModule export and commented-out examples."
+      - "Idempotent: skips files that already exist unless --force."
     flags:
-      - "--setters-path <path>   (default: runner/setters.ts)"
       - "--envs-dir <path>       (default: envs)"
       - "--force"
 
   run:
     purpose: >
-      Resolve env + setters, exec hurl with --variable and --secret
-      injections. Hurlman does NOT format, filter, or interpret hurl's
-      output in any way — hurl owns stdout/stderr completely via stdio
-      inherit.
+      Resolve env modules, inject --variable / --secret flags, exec hurl.
+      Hurlman does NOT format, filter, or interpret hurl's output —
+      stdio is inherited.
     behavior:
       - >-
-        Argument boundary: hurlman parses only flags before the literal "--"
-        separator. Everything after "--" is forwarded to hurl verbatim
-        (paths, --glob, --very-verbose, --report-html, --test, --json,
-        --error-format, etc.). If "--" is missing or no args follow it,
-        hurlman exits with a usage error.
+        Argument boundary: hurlman parses only flags before the literal
+        "--" separator. Everything after "--" is forwarded to hurl
+        verbatim. If "--" is missing or no args follow, hurlman exits
+        with a usage error.
       - >-
-        Loads envs in left-to-right order; later keys override earlier. If no
-        --env flags, loads envs/default.env only (errors if absent).
+        Loads envs in order: default.js first, then each --env in
+        left-to-right order. Errors clearly if any file is missing.
       - >-
-        Runs all setters via the cache (resolve flow, see setter_api below).
-        If a setter's produce() throws, the error is logged and the run aborts.
+        After merging, splits entries into static variables and setters,
+        then runs setters via the cache (resolve flow, see cache_api).
+        If a setter throws, hurlman writes the error to stderr and
+        aborts with exit code 1.
       - >-
-        Env-file keys (already lowercased) are hurl variables directly. Setter
-        outputs override env-file values for the same key.
+        Static variables become hurl --variable flags. Setter outputs
+        with secret:true become --secret; otherwise --variable.
       - >-
-        Spawns hurl with stdio: inherit. Hurl writes directly to the user's
-        stdout/stderr. Hurlman captures nothing, formats nothing, parses no
-        report. The user picks output behavior via hurl's own flags
+        Spawns hurl with stdio: inherit. Hurl writes directly to the
+        user's stdout/stderr. Hurlman captures nothing and parses no
+        report. Output behavior is fully controlled by hurl's own flags
         (--verbose, --error-format, --report-html, etc.).
       - "Exits with hurl's exit status."
     flags:
       - "--env <name>            (repeatable; left-to-right composition)"
-      - "--setters-path <path>"
       - "--envs-dir <path>"
     env:
       - "REFRESH=1               (bypass cache for this invocation)"
 
   env:
     purpose: >
-      Print the resolved hurl-variable map. Useful for eval, sanity checks, or
+      Print the resolved hurl-variable map. Useful for sanity checks or
       piping into other tools.
     behavior:
       - "Loads envs the same way 'run' does."
-      - "Runs all setters (with cache). If a setter's produce() throws, the
-        error is logged and the command aborts."
-      - "Prints key=value lines on stdout, one per variable, sorted by key."
-      - >-
-        Detects overlaps: if a setter output has the same key as an env-file
-        variable, prints a "# WARNING: <key> overridden by setter (was: <env
-        value>)" line on stderr. Does not abort — purely informational.
+      - "Runs all setters (with cache). On error, aborts with exit
+        code 1 (same as run)."
+      - "Prints key=value lines on stdout, sorted by key."
     flags:
       - "--env <name>            (repeatable)"
+      - "--envs-dir <path>"
 
   cache:
     purpose: Inspect / manage the persistent cache file.
     actions:
       list: >-
-        Prints "<key>\t<cachedAt>" lines for each entry. (Values omitted to
-        avoid leaking secrets to stdout.)
+        Prints "<key>\t<cachedAt>" lines for each entry. Values omitted
+        to avoid leaking secrets to stdout.
       clear: "Deletes all entries."
       "invalidate <key>": "Deletes one entry by exact key."
     behavior:
       - >-
-        Cache file path: .cache.json in project root. Configurable via the
-        HURLMAN_CACHE_PATH env var.
-
-env_loader:
-  file_format:
-    - "KEY=VALUE per line."
-    - "Lines starting with # and blank lines are ignored."
-    - "Single or double-quoted values are unwrapped."
-    - "No multi-line values, no shell expansion, no variable interpolation."
-  composition:
-    - >-
-      "--env a --env b --env c" loads envs/a.env, envs/b.env, envs/c.env in that
-      order, merging into a single object; later writes win on key conflict.
-    - "If --env is absent, loads envs/default.env. Errors clearly if absent."
-    - "Errors clearly if any named file is missing — never silent fallback."
-  normalization:
-    - >-
-      All keys are lowercased at load time. Env file keys become hurl variables
-      directly — no separate casing layer or \"auto-passthrough\" concept.
-    - "Setters always win over env-file values for the same key."
-
-setter_api:
-  intent: >-
-    Setters are how a project declares "computed" hurl variables — values that
-    require code to produce (sign a JWT, fetch a token, derive a hash) rather
-    than coming directly from an env file. The setter file is user code; the
-    runner just consumes the contract. Env files hold static configuration;
-    setters consume that configuration to produce derived values. This split is
-    deliberate: env files are simple and diffable; setters are shared code that
-    works across all environments.
-  contract:
-    location: "Default runner/setters.ts. Configurable at init time."
-    export: >-
-      A module whose default export is an object whose keys are hurl variable
-      names (lower_snake) and whose values are setter records.
-    record_fields:
-      produce:
-        type: "(env: Record<string, string>) => string | Promise<string>"
-        required: true
-        notes: "env is the resolved key/value object from the env loader."
-      cacheable:
-        type: boolean
-        default: false
-        notes: >-
-          When false, produce() runs every invocation. Use for cheap
-          pass-through aliases.
-      ttlMs:
-        type: number
-        default: 3600000
-        notes: >-
-          Max cache age in milliseconds (default 1 hour). After this, value is
-          re-produced. Set to Infinity to cache indefinitely.
-      validator:
-        type: "(value: string) => boolean"
-        default: undefined
-        notes: >-
-          Optional second freshness check on the cached value (e.g. JWT exp
-          claim still valid). Returns false → re-produce.
-      secret:
-        type: boolean
-        default: false
-        notes: >-
-          When true, the value is injected via hurl --secret instead of
-          --variable, so it is redacted in hurl's verbose output. Use for
-          tokens, passwords, or any value that should not appear in logs.
-      fingerprint:
-        type: "(env: Record<string, string>) => string"
-        default: "() => ''"
-        notes: >-
-          Derives a cache-key suffix from inputs that determine the value. When
-          inputs change, the cache key changes and old entries are bypassed (not
-          deleted — use 'cache clear' for that). Critical for correctness when
-          switching between envs that produce different tokens for the same
-          variable name.
-  error_handling: >-
-    If produce() throws during run or env, the runner logs the error message
-    (including the setter key) to stderr and aborts with a non-zero exit code.
-    Does not catch silently — failures must be visible.
-  examples:
-    - >-
-      api_token: produce=signJwt, cacheable=true, ttlMs=28800000,
-      validator=jwtStillValid, fingerprint=(env)=>env.client_id
-    - >-
-      vendor_token: produce=fetchVendorToken, cacheable=true, ttlMs=28800000,
-      validator=jwtStillValid, fingerprint=(env)=>env.app_id
+        Cache file path: .cache.json in project root. Configurable via
+        the HURLMAN_CACHE_PATH env var.
 
 cache_api:
   file:
     path: ".cache.json (or HURLMAN_CACHE_PATH override)."
     format: >-
-      JSON object keyed by "<varName>::<fingerprint>". Values are { value:
-      <produced>, cachedAt: <ISO timestamp> }.
+      JSON object keyed by "<varName>::<fingerprint>". Values are
+      { value: <produced>, cachedAt: <ISO timestamp> }.
   key_derivation:
     - "<varName>::<setter.fingerprint(env) || ''>"
     - >-
-      No env name in the key. Fingerprint encodes the inputs that determine the
-      value; same inputs from any env share the cache.
+      No env name in the key. Fingerprint encodes the inputs that
+      determine the value; same inputs from any env share the cache.
   freshness_rules:
     - "cachedAt + ttlMs > now, AND"
     - "validator(value) === true (if validator defined)."
@@ -250,38 +235,33 @@ logging:
 
 file_layout:
   produced_by_init:
-    - "envs/                        (user adds env files here)"
-    - "envs/default.env             (stub)"
-    - "runner/setters.ts            (stub export with commented-out examples)"
-    - "scripts/README.md            (explains: bash scripts composing npx hurlman
-      calls)"
+    - "envs/                  (user adds env files here)"
+    - "envs/default.js        (stub EnvModule with commented examples)"
   user_owned:
-    - "envs/*.env                   (all env files)"
-    - "runner/setters.ts            (the contract; user writes producers)"
-    - "scripts/*                    (ad-hoc bash compositions)"
-    - "any *.hurl files             (location is the project's choice)"
+    - "envs/*.{js,mjs,cjs}    (all env modules; one per environment)"
+    - "any *.hurl files       (location is the project's choice)"
   runner_owned: >-
-    The runner internals (env loader, cache, dispatcher). Shipped via the
-    npm package; user does not modify.
+    The runner internals (env loader, cache, dispatcher). Shipped via
+    the npm package; user does not modify.
 
 verification:
   must_pass:
     - >-
-      "npx hurlman init" in an empty directory produces the expected files and
-      idempotently no-ops on re-run.
+      "npx hurlman init" in an empty directory creates envs/default.js
+      and idempotently no-ops on re-run.
     - >-
-      "npx hurlman init" with hurl not on PATH exits with a clear error before
-      creating any files.
+      "npx hurlman init" with hurl not on PATH exits with a clear error
+      before creating any files.
     - >-
-      "npx hurlman env" shows lowercase versions of all env vars from the env
-      files, plus computed values from setters.
+      "npx hurlman init" detects the user's package.json type:module
+      flag and writes the matching template syntax.
     - >-
-      "npx hurlman env" prints overlap warnings to stderr when a setter key
-      shadows an env-file key. Does not abort.
+      "npx hurlman env" prints all merged variables (static + computed)
+      sorted by key.
     - >-
-      "npx hurlman run -- foo.hurl" invokes hurl with --variable injections.
-      Hurl owns stdout/stderr; output looks identical to running hurl
-      directly aside from the injected --variable/--secret flags.
+      "npx hurlman run -- foo.hurl" invokes hurl with --variable
+      injections. Hurl owns stdout/stderr; output looks identical to
+      running hurl directly aside from injected flags.
     - >-
       "npx hurlman run -- foo.hurl --very-verbose --error-format long"
       passes those flags through to hurl unchanged.
@@ -289,14 +269,22 @@ verification:
       "npx hurlman run foo.hurl" (missing "--") exits with a usage error
       explaining that "--" is required.
     - >-
-      "--env" composition: "--env a --env b" overrides "--env a"'s keys
-      with b's; reversing the order reverses precedence.
+      "--env" composition: a setter declared in default.js runs against
+      the merged variables from the named env(s), so per-env inputs
+      flow through automatically.
     - >-
-      A setter whose produce() throws causes the command to log the error
-      and abort with a non-zero exit code.
+      A setter whose produce() throws causes the command to write the
+      error to stderr and abort with exit code 1.
     - >-
-      Cache: re-running "npx hurlman env" does not re-execute setters
-      (timestamps in "cache list" unchanged). REFRESH=1 forces re-execution.
+      Cache: re-running "npx hurlman env" does not re-execute cacheable
+      setters (cache list timestamps unchanged). REFRESH=1 forces
+      re-execution.
     - >-
       Cache: changing a setter's fingerprint inputs (e.g. switching env)
       produces a new entry without disturbing the old one.
+    - >-
+      Missing envs/default.{js,mjs,cjs} produces a clear error before
+      any hurl call.
+    - >-
+      A variable whose value is neither a string nor a valid setter
+      record produces a clear error naming the variable and its file.

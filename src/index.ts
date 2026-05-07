@@ -5,7 +5,6 @@ import { initCommand } from './commands/init.js';
 import { runCommand } from './commands/run.js';
 import { envCommand } from './commands/env.js';
 import { cacheCommand } from './commands/cache.js';
-import type { LogMode } from './types.js';
 
 const collect = (val: string, prev: string[]) => prev.concat(val);
 
@@ -20,17 +19,26 @@ program
   .action((opts) => initCommand(opts));
 
 program
-  .command('run [passthrough...]')
-  .description('Resolve env + setters, run hurl')
+  .command('run [hurlArgs...]')
+  .description(
+    'Resolve env + setters, then exec hurl. Hurlman flags come first; ' +
+      'put "--" before all hurl args. Example: ' +
+      'hurlman run --env staging -- foo.hurl --test --very-verbose',
+  )
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
-  .option('--log <mode>', 'Log mode: quiet | default | full | raw', 'default')
   .option('--setters-path <path>', 'Path to setters file')
   .option('--envs-dir <path>', 'Path to envs directory')
-  .action((passthrough: string[], opts) => {
+  .action((hurlArgs: string[], opts) => {
+    if (!hurlArgs || hurlArgs.length === 0) {
+      process.stderr.write(
+        'hurlman run: no hurl arguments provided. Use "--" to pass args to hurl, e.g.\n' +
+          '  hurlman run --env staging -- foo.hurl --test\n',
+      );
+      process.exit(2);
+    }
     runCommand({
       env: opts.env,
-      log: opts.log as LogMode,
-      passthrough: passthrough ?? [],
+      hurlArgs,
       settersPath: opts.settersPath,
       envsDir: opts.envsDir,
     });

@@ -1,5 +1,3 @@
-export type LogMode = 'quiet' | 'default' | 'full' | 'raw';
-
 export interface SetterRecord {
   produce: (env: Record<string, string>) => string | Promise<string>;
   cacheable?: boolean;
@@ -22,25 +20,4 @@ export interface CacheFile {
   [key: string]: CacheEntry;
 }
 
-export interface HurlEntry {
-  index: number;
-  method: string;
-  url: string;
-  status: number;
-  asserts: HurlAssert[];
-  request: {
-    headers: { name: string; value: string }[];
-  };
-  response: {
-    headers: { name: string; value: string }[];
-    status: number;
-    url: string;
-    body: string;
-  };
-}
 
-export interface HurlAssert {
-  success: boolean;
-  message: string;
-  line: number;
-}

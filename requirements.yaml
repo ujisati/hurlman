@@ -15,11 +15,11 @@ package:
     - "init is the one-shot project setup; everything else (run, env, cache) is
       day-to-day use."
     - >-
-      Runner-owned flags (--env, --log) are first-class CLI flags parsed by the
-      CLI lib. Everything the CLI does not recognize is forwarded to hurl
-      verbatim. No -- separator required when invoking hurlman directly; -- is
-      only needed in npm scripts where npm itself would otherwise consume the
-      args.
+      Hurlman flags (--env, --setters-path, --envs-dir) come first. A literal
+      "--" separator MUST precede all arguments destined for hurl. Everything
+      after "--" is passed to hurl verbatim. This is a hard boundary — no
+      auto-detection, no overlap, no ambiguity. Example:
+      "hurlman run --env staging -- foo.hurl --test --very-verbose".
   non_goals:
     - "Replacing hurl's syntax, assertion engine, or test discovery."
     - "Tag systems (use --glob and directory layout instead)."
@@ -70,12 +70,17 @@ subcommands:
 
   run:
     purpose: >
-      Resolve env + setters, exec hurl with --variable and --secret injections.
+      Resolve env + setters, exec hurl with --variable and --secret
+      injections. Hurlman does NOT format, filter, or interpret hurl's
+      output in any way — hurl owns stdout/stderr completely via stdio
+      inherit.
     behavior:
       - >-
-        --env and --log are parsed by Commander. All unrecognized args are
-        forwarded to hurl verbatim, in order (paths, --glob, --very-verbose,
-        --report-html, etc.).
+        Argument boundary: hurlman parses only flags before the literal "--"
+        separator. Everything after "--" is forwarded to hurl verbatim
+        (paths, --glob, --very-verbose, --report-html, --test, --json,
+        --error-format, etc.). If "--" is missing or no args follow it,
+        hurlman exits with a usage error.
       - >-
         Loads envs in left-to-right order; later keys override earlier. If no
         --env flags, loads envs/default.env only (errors if absent).
@@ -86,24 +91,15 @@ subcommands:
         Env-file keys (already lowercased) are hurl variables directly. Setter
         outputs override env-file values for the same key.
       - >-
-        If --error-format is present in the passthrough args: disables custom
-        log formatting entirely. Hurl is invoked directly with all args
-        forwarded and its native stdout/stderr stream unchanged. --log is
-        ignored in this case.
-      - >-
-        For --log = quiet | default | full: invokes hurl with --report-json
-        <tmpdir> (no implicit --test; user may pass --test as a hurl arg).
-        Hurl's stdout and stderr are fully captured and not forwarded. Hurlman
-        owns all output, formatted from the JSON report (entries, assert
-        failures, response bodies in <tmpdir>/store/).
-      - >-
-        For --log = raw: invokes hurl --json and forwards stdout unchanged for
-        piping to jq.
+        Spawns hurl with stdio: inherit. Hurl writes directly to the user's
+        stdout/stderr. Hurlman captures nothing, formats nothing, parses no
+        report. The user picks output behavior via hurl's own flags
+        (--verbose, --error-format, --report-html, etc.).
       - "Exits with hurl's exit status."
     flags:
       - "--env <name>            (repeatable; left-to-right composition)"
-      - "--log <mode>            (quiet | default | full | raw; default is
-        'default')"
+      - "--setters-path <path>"
+      - "--envs-dir <path>"
     env:
       - "REFRESH=1               (bypass cache for this invocation)"
 
@@ -241,31 +237,16 @@ cache_api:
     - "REFRESH=1 forces re-produce regardless of freshness."
 
 logging:
-  modes:
-    quiet: "METHOD URL → STATUS, one line per call."
-    default: "Same as quiet plus pretty-printed response body."
-    full: "Same as default plus request and response headers."
-    raw: "Forwards 'hurl --json' stdout unchanged for piping to jq."
+  philosophy: >-
+    Hurl owns logging. Hurlman never formats, captures, or interprets
+    hurl's output. Use hurl's own flags (--verbose, --very-verbose,
+    --error-format long, --report-html, --json, etc.) to control what
+    you see. Anything more than that is out of scope for hurlman.
   implementation:
-    - >-
-      If --error-format is in passthrough args: skip all custom formatting,
-      invoke hurl directly, stream its output as-is. Acts as a full escape hatch
-      to hurl's native output.
-    - >-
-      For quiet/default/full: invoke hurl with --report-json <tmpdir> (no
-      implicit --test). Capture hurl's stdout and stderr. Read
-      <tmpdir>/report.json and <tmpdir>/store/<id>_response.json for bodies.
-      Hurlman emits all output.
-    - "For raw: invoke hurl --json and stream stdout."
-    - >-
-      Failed asserts always render after the request lines for the entry,
-      regardless of mode.
-    - "Color output when stdout is a TTY; plain text otherwise."
-    - >-
-      ANSI coloring for quiet/default/full output: method in bold, URL in cyan,
-      status green for 2xx, yellow for 3xx/4xx, red for 5xx. Failed assert
-      messages in red. Response body keys/punctuation dimmed, values default. No
-      coloring for raw mode (piped JSON must be clean).
+    - "Spawn hurl with stdio: 'inherit'."
+    - "Args: --secret injections, then --variable injections, then user
+      args from after '--', in that order."
+    - "No --report-json, no capture, no parsing, no formatting."
 
 file_layout:
   produced_by_init:
@@ -280,8 +261,8 @@ file_layout:
     - "scripts/*                    (ad-hoc bash compositions)"
     - "any *.hurl files             (location is the project's choice)"
   runner_owned: >-
-    The runner internals (env loader, cache, log formatter, dispatcher). Shipped
-    via the npm package; user does not modify.
+    The runner internals (env loader, cache, dispatcher). Shipped via the
+    npm package; user does not modify.
 
 verification:
   must_pass:
@@ -298,20 +279,24 @@ verification:
       "npx hurlman env" prints overlap warnings to stderr when a setter key
       shadows an env-file key. Does not abort.
     - >-
-      "npx hurlman run" invokes hurl with --variable injections; default log
-      mode shows url + status + response body per call.
+      "npx hurlman run -- foo.hurl" invokes hurl with --variable injections.
+      Hurl owns stdout/stderr; output looks identical to running hurl
+      directly aside from the injected --variable/--secret flags.
     - >-
-      "--env" composition: "--env a --env b" overrides "--env a"'s keys with
-      b's; reversing the order reverses precedence.
+      "npx hurlman run -- foo.hurl --very-verbose --error-format long"
+      passes those flags through to hurl unchanged.
     - >-
-      A setter whose produce() throws causes the command to log the error and
-      abort with a non-zero exit code.
+      "npx hurlman run foo.hurl" (missing "--") exits with a usage error
+      explaining that "--" is required.
+    - >-
+      "--env" composition: "--env a --env b" overrides "--env a"'s keys
+      with b's; reversing the order reverses precedence.
+    - >-
+      A setter whose produce() throws causes the command to log the error
+      and abort with a non-zero exit code.
     - >-
       Cache: re-running "npx hurlman env" does not re-execute setters
       (timestamps in "cache list" unchanged). REFRESH=1 forces re-execution.
     - >-
       Cache: changing a setter's fingerprint inputs (e.g. switching env)
       produces a new entry without disturbing the old one.
-    - >-
-      All hurl flags (--glob, --very-verbose, --report-html, paths, etc.) pass
-      through unchanged regardless of log mode.

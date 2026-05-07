@@ -51,9 +51,23 @@ program
   .option('--refresh', 'Force re-produce of cacheable setters; updates the cache')
   .action((opts) => envCommand(opts));
 
-program
-  .command('cache <action> [key]')
-  .description('Inspect / manage the persistent cache')
-  .action((action: string, key: string | undefined) => cacheCommand(action, key));
+const cache = program
+  .command('cache')
+  .description('Inspect / manage the persistent cache');
+
+cache
+  .command('list')
+  .description('List all cache keys and their timestamps')
+  .action(() => cacheCommand('list'));
+
+cache
+  .command('clear')
+  .description('Wipe the entire cache')
+  .action(() => cacheCommand('clear'));
+
+cache
+  .command('invalidate <key>')
+  .description('Remove a single cache entry by key')
+  .action((key: string) => cacheCommand('invalidate', key));
 
 program.parse();

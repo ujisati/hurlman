@@ -191,7 +191,7 @@ subcommands:
 
   cache:
     purpose: Inspect / manage the persistent cache file.
-    actions:
+    subcommands:
       list: >-
         Prints "<key>\t<cachedAt>" lines for each entry. Values omitted
         to avoid leaking secrets to stdout.

@@ -54,10 +54,12 @@ npx hurlman run -- requests/users.hurl --test
 Hurlman flags come first. The literal `--` separator divides hurlman flags from hurl flags. Anything after `--` is forwarded to hurl verbatim.
 
 ```bash
-npx hurlman run [--env <name>...] [--envs-dir <path>] -- <hurl args>
-npx hurlman env [--env <name>...] [--envs-dir <path>]
+npx hurlman run [--env <name>...] [--envs-dir <path>] [--refresh] -- <hurl args>
+npx hurlman env [--env <name>...] [--envs-dir <path>] [--refresh]
 npx hurlman init [--envs-dir <path>] [--force]
-npx hurlman cache list | clear | invalidate <key>
+npx hurlman cache list
+npx hurlman cache clear
+npx hurlman cache invalidate <key>
 ```
 
 Examples:
@@ -124,9 +126,9 @@ Cache is stored at `.cache.json` in the project root (override via `HURLMAN_CACH
 
 ```bash
 npx hurlman cache list             # show keys + timestamps (no values)
-npx hurlman cache invalidate <key> # remove one
-npx hurlman cache clear            # wipe
-REFRESH=1 npx hurlman run -- ...   # bypass cache for this run
+npx hurlman cache invalidate <key> # remove one entry
+npx hurlman cache clear            # wipe all
+npx hurlman run --refresh -- ...   # bypass cache for this run (writes back)
 ```
 
 ## TypeScript users

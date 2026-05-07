@@ -1,0 +1,30 @@
+{
+  "name": "hurlman",
+  "version": "0.1.0",
+  "description": "Thin CLI wrapper around hurl with env composition, computed variables, and per-request logging",
+  "bin": {
+    "hurlman": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "hurl": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hurl": {
+      "optional": true
+    }
+  }
+}

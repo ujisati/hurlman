@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Thin CLI wrapper around hurl with env composition and computed-variable injection.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ujisati/hurlman.git"
+  },
+  "homepage": "https://github.com/ujisati/hurlman#readme",
+  "bugs": {
+    "url": "https://github.com/ujisati/hurlman/issues"
+  },
   "keywords": [
     "hurl",
     "http",

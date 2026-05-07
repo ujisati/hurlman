@@ -26,6 +26,7 @@ program
   )
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
   .option('--envs-dir <path>', 'Path to envs directory')
+  .option('--refresh', 'Force re-produce of cacheable setters; updates the cache')
   .action((hurlArgs: string[], opts) => {
     if (!hurlArgs || hurlArgs.length === 0) {
       process.stderr.write(
@@ -38,6 +39,7 @@ program
       env: opts.env,
       hurlArgs,
       envsDir: opts.envsDir,
+      refresh: opts.refresh,
     });
   });
 
@@ -46,6 +48,7 @@ program
   .description('Print the resolved hurl-variable map')
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
   .option('--envs-dir <path>', 'Path to envs directory')
+  .option('--refresh', 'Force re-produce of cacheable setters; updates the cache')
   .action((opts) => envCommand(opts));
 
 program

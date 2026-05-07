@@ -171,8 +171,8 @@ subcommands:
     flags:
       - "--env <name>            (repeatable; left-to-right composition)"
       - "--envs-dir <path>"
-    env:
-      - "REFRESH=1               (bypass cache for this invocation)"
+      - "--refresh               (force re-produce of cacheable setters
+        this run; updates the cache with fresh values)"
 
   env:
     purpose: >
@@ -186,6 +186,8 @@ subcommands:
     flags:
       - "--env <name>            (repeatable)"
       - "--envs-dir <path>"
+      - "--refresh               (force re-produce of cacheable setters
+        this run; updates the cache with fresh values)"
 
   cache:
     purpose: Inspect / manage the persistent cache file.
@@ -219,7 +221,10 @@ cache_api:
     - "If setter.cacheable is false: produce(env) directly, return."
     - "Else: read cache, check freshness, return cached value if fresh."
     - "Else: produce(env), write entry, return."
-    - "REFRESH=1 forces re-produce regardless of freshness."
+    - >-
+      --refresh forces re-produce regardless of freshness; the new values
+      are written back to the cache. To wipe entries, use the cache
+      subcommand (clear / invalidate).
 
 logging:
   philosophy: >-
@@ -277,8 +282,8 @@ verification:
       error to stderr and abort with exit code 1.
     - >-
       Cache: re-running "npx hurlman env" does not re-execute cacheable
-      setters (cache list timestamps unchanged). REFRESH=1 forces
-      re-execution.
+      setters (cache list timestamps unchanged). --refresh forces
+      re-execution and updates the cache.
     - >-
       Cache: changing a setter's fingerprint inputs (e.g. switching env)
       produces a new entry without disturbing the old one.

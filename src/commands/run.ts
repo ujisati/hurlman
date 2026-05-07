@@ -8,6 +8,7 @@ export async function runCommand(opts: {
   env: string[];
   hurlArgs: string[];
   envsDir?: string;
+  refresh?: boolean;
 }): Promise<void> {
   const envsDir = opts.envsDir ?? DEFAULT_ENVS_DIR;
 
@@ -15,7 +16,7 @@ export async function runCommand(opts: {
   let secrets: Record<string, string>;
   try {
     const resolved = await loadEnvs(opts.env, envsDir);
-    const ran = await runSetters(resolved.setters, resolved.variables);
+    const ran = await runSetters(resolved.setters, resolved.variables, opts.refresh ?? false);
     variables = { ...resolved.variables, ...ran.variables };
     secrets = ran.secrets;
   } catch (err: unknown) {

@@ -1,8 +1,6 @@
 import type { SetterRecord } from '../types.js';
 import { getEntry, setEntry, deriveKey, isFresh } from './cache-engine.js';
 
-const REFRESH = (process.env.REFRESH ?? '0') !== '0';
-
 export interface ResolvedVars {
   variables: Record<string, string>;
   secrets: Record<string, string>;
@@ -11,6 +9,7 @@ export interface ResolvedVars {
 export async function runSetters(
   setters: Record<string, SetterRecord>,
   env: Record<string, string>,
+  refresh = false,
 ): Promise<ResolvedVars> {
   const variables: Record<string, string> = {};
   const secrets: Record<string, string> = {};
@@ -20,11 +19,11 @@ export async function runSetters(
 
     let value: string;
 
-    if (setter.cacheable && !REFRESH) {
+    if (setter.cacheable) {
       const fp = (setter.fingerprint ?? (() => ''))(env);
       const key = deriveKey(name, fp);
-      const cached = getEntry(key);
       const validator = setter.validator;
+      const cached = refresh ? undefined : getEntry(key);
 
       if (cached && isFresh(cached, ttlMs, validator)) {
         value = cached.value;

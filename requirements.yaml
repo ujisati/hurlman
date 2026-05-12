@@ -5,7 +5,9 @@ package:
     computed-variable injection (with persistent caching). Lets a project
     run hurl files via "npx hurlman run -- ..." without sourcing shell
     scripts, and lets users declare token-minting / value-fetching logic
-    inline alongside their static config.
+    inline alongside their static config. Includes an optional transparent
+    HTTP proxy cache that replays prior API responses without modifying
+    .hurl files.
   distribution: >-
     Published npm package. Exposes bin "hurlman". Written in TypeScript,
     compiled to JS for distribution. Hurlman itself ships as CommonJS;
@@ -35,6 +37,7 @@ package:
 dependencies:
   runtime:
     - "commander — subcommand + flag parsing."
+    - "better-sqlite3 — SQLite storage for token cache and HTTP response cache."
   peer:
     - "hurl >= 4.0 must be installed and on PATH (verified at runtime,
       not declared as an npm peerDependency since hurl is not on npm)."
@@ -168,11 +171,20 @@ subcommands:
         report. Output behavior is fully controlled by hurl's own flags
         (--verbose, --error-format, --report-html, etc.).
       - "Exits with hurl's exit status."
+      - >-
+        When the proxy cache is active (proxy.enabled=true in hurlman.json
+        or --cache flag): hurlman starts the local proxy (or uses proxy.url
+        if set), appends --proxy <address> and --insecure to hurl args,
+        tears down after hurl exits.
     flags:
       - "--env <name>            (repeatable; left-to-right composition)"
       - "--envs-dir <path>"
       - "--refresh               (force re-produce of cacheable setters
         this run; updates the cache with fresh values)"
+      - "--cache                 (enable HTTP proxy cache for this run,
+        overriding proxy.enabled in hurlman.json)"
+      - "--no-cache              (disable HTTP proxy cache for this run,
+        overriding proxy.enabled in hurlman.json)"
 
   env:
     purpose: >
@@ -190,24 +202,34 @@ subcommands:
         this run; updates the cache with fresh values)"
 
   cache:
-    purpose: Inspect / manage the persistent cache file.
+    purpose: Inspect / manage the persistent cache database.
     subcommands:
       list: >-
-        Prints "<key>\t<cachedAt>" lines for each entry. Values omitted
-        to avoid leaking secrets to stdout.
-      clear: "Deletes all entries."
-      "invalidate <key>": "Deletes one entry by exact key."
+        Prints "<key>\t<cachedAt>" lines for each token/setter cache entry.
+        Values omitted to avoid leaking secrets to stdout.
+      clear: >-
+        No flags: wipes all HTTP response entries AND all token cache entries.
+        --responses: wipe only HTTP response entries (optionally filtered by
+        URL substring pattern argument).
+        --setters: wipe only token/setter cache entries.
+        Pattern (substring match against URL) is only meaningful with
+        --responses or when clearing all responses.
+      "invalidate <key>": "Deletes one token cache entry by exact key."
     behavior:
       - >-
-        Cache file path: .cache.json in project root. Configurable via
+        Database path: .hurlman.db in project root. Configurable via
         the HURLMAN_CACHE_PATH env var.
 
 cache_api:
+  scope: >-
+    Covers setter/token values only. HTTP request/response caching is
+    specified under http_proxy_cache.
   file:
-    path: ".cache.json (or HURLMAN_CACHE_PATH override)."
+    path: ".hurlman.db in project root (or HURLMAN_CACHE_PATH override)."
     format: >-
-      JSON object keyed by "<varName>::<fingerprint>". Values are
-      { value: <produced>, cachedAt: <ISO timestamp> }.
+      SQLite database managed by better-sqlite3. Single file; no background
+      process. Token cache entries live in the token_cache table:
+        token_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, cached_at TEXT NOT NULL)
   key_derivation:
     - "<varName>::<setter.fingerprint(env) || ''>"
     - >-
@@ -225,6 +247,95 @@ cache_api:
       --refresh forces re-produce regardless of freshness; the new values
       are written back to the cache. To wipe entries, use the cache
       subcommand (clear / invalidate).
+
+http_proxy_cache:
+  intent: >-
+    Hurlman optionally spawns a local HTTP proxy before each hurl invocation
+    and injects --proxy <address> (and --insecure) transparently. Hurl is
+    unaware. Setup calls cached from a prior run return immediately without
+    hitting the real API. The proxy tears down cleanly after hurl exits.
+  storage:
+    database: >-
+      Same .hurlman.db file as the token cache (or HURLMAN_CACHE_PATH
+      override).
+    responses_schema: |
+      responses (
+        key              TEXT PRIMARY KEY,   -- derived cache key
+        method           TEXT NOT NULL,
+        url              TEXT NOT NULL,
+        status_code      INTEGER NOT NULL,
+        response_headers TEXT NOT NULL,      -- JSON
+        response_body    BLOB NOT NULL,
+        cached_at        TEXT NOT NULL       -- ISO timestamp
+      )
+  key_derivation:
+    - "METHOD + \"::\" + URL + \"::\" + SHA256(request body; empty string if no body)"
+    - >-
+      Auth headers (Authorization, X-Auth-Token, X-API-Key, Cookie) are
+      excluded from the hash so a token rotation does not invalidate cached
+      responses.
+  config:
+    - "Controlled by hurlman.json (see hurlman_config section)."
+    - "proxy.enabled = false by default; proxy does not start unless enabled."
+    - >-
+      proxy.url (optional): custom proxy address; if absent, hurlman picks
+      localhost:<free-port>.
+    - "--cache / --no-cache run flags override proxy.enabled for a single invocation."
+  proxy_behavior:
+    - >-
+      When active: hurlman selects an available local port (unless proxy.url
+      is set), starts the proxy, appends --proxy <address> and --insecure to
+      the hurl invocation, then tears the proxy down after hurl exits.
+    - >-
+      When inactive: no proxy, no flag injection, hurl invocation is
+      unchanged.
+  freshness:
+    - >-
+      A cached response is fresh if (now - cached_at) <= proxy.ttlMs, or if
+      proxy.ttlMs is null (no expiry). Stale entries are treated as misses:
+      the real request goes through, the fresh response overwrites the entry.
+  replay:
+    - >-
+      Automatic on cache hit (fresh entry). No replay-mode flag. On miss or
+      stale entry, the real request goes through and the response is stored.
+  invalidation:
+    - "hurlman cache clear              -- wipe all response + token cache entries"
+    - "hurlman cache clear --responses  -- wipe only HTTP response entries"
+    - "hurlman cache clear --responses <pattern> -- wipe response entries where url contains <pattern>"
+    - "hurlman cache clear --setters    -- wipe only token/setter cache entries"
+    - "Body change = automatic miss (SHA256 won't match)."
+    - "Token rotation = no invalidation needed (auth headers excluded from key)."
+
+hurlman_config:
+  file:
+    path: "hurlman.json in the project root. User-owned; commit it if desired."
+    format: |
+      JSON object. Hurlman reads it at startup; missing file = all defaults apply.
+      Shape:
+        {
+          "proxy": {
+            "enabled": false,       // default; set true to activate HTTP proxy cache
+            "url": "<optional>",    // override the auto-selected proxy address;
+                                    // if absent, hurlman picks localhost:<free-port>
+            "ttlMs": 28800000       // default 8 hours; null = no expiry
+          }
+        }
+  known_keys:
+    proxy.enabled: >-
+      boolean. Controls whether the HTTP proxy cache starts on run/env.
+    proxy.url: >-
+      string (optional). Custom proxy address instead of auto-selected one.
+      Useful for routing through an existing corporate proxy or test setup.
+    proxy.ttlMs: >-
+      number | null. How long a cached response is considered fresh, in
+      milliseconds. Default: 28800000 (8 hours). null means entries never
+      expire. Responses past TTL are treated as misses and re-fetched.
+  behavior:
+    - "hurlman.json is parsed once at process start; malformed JSON → clear error + exit 1."
+    - "Unknown keys are ignored (forward-compat)."
+    - >-
+      --cache / --no-cache run flags override proxy.enabled for that
+      invocation only; they do not modify hurlman.json.
 
 logging:
   philosophy: >-
@@ -245,9 +356,12 @@ file_layout:
   user_owned:
     - "envs/*.{js,mjs,cjs}    (all env modules; one per environment)"
     - "any *.hurl files       (location is the project's choice)"
-  runner_owned: >-
-    The runner internals (env loader, cache, dispatcher). Shipped via
-    the npm package; user does not modify.
+    - "hurlman.json           (persistent config — proxy settings; commit if desired)"
+  runner_owned:
+    - >-
+      The runner internals (env loader, cache, dispatcher). Shipped via
+      the npm package; user does not modify.
+    - ".hurlman.db            (SQLite database — token cache + HTTP response cache; gitignore this)"
 
 verification:
   must_pass:

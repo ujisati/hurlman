@@ -1,6 +1,6 @@
 # hurlman
 
-A thin CLI wrapper around [hurl](https://hurl.dev/) that adds environment composition and computed-variable injection (with persistent caching). Lets you declare token-minting / value-fetching logic alongside your static config and run hurl files without sourcing shell scripts.
+A thin CLI wrapper around [hurl](https://hurl.dev/) that adds environment composition, computed-variable injection (with persistent caching), and an optional transparent HTTP proxy cache that replays prior API responses without modifying `.hurl` files.
 
 Hurlman does not format, capture, or interpret hurl's output. Hurl owns stdout/stderr.
 
@@ -54,11 +54,11 @@ npx hurlman run -- requests/users.hurl --test
 Hurlman flags come first. The literal `--` separator divides hurlman flags from hurl flags. Anything after `--` is forwarded to hurl verbatim.
 
 ```bash
-npx hurlman run [--env <name>...] [--envs-dir <path>] [--refresh] -- <hurl args>
+npx hurlman run [--env <name>...] [--envs-dir <path>] [--refresh] [--cache|--no-cache] -- <hurl args>
 npx hurlman env [--env <name>...] [--envs-dir <path>] [--refresh]
 npx hurlman init [--envs-dir <path>] [--force]
 npx hurlman cache list
-npx hurlman cache clear
+npx hurlman cache clear [--responses [<pattern>]] [--setters]
 npx hurlman cache invalidate <key>
 ```
 
@@ -70,6 +70,9 @@ npx hurlman run -- foo.hurl
 
 # Compose default + staging:
 npx hurlman run --env staging -- foo.hurl --test
+
+# Enable HTTP response cache for this run:
+npx hurlman run --cache -- foo.hurl
 
 # Pass any hurl flag through:
 npx hurlman run -- foo.hurl --very-verbose --error-format long --report-html out/
@@ -114,22 +117,61 @@ Each setter is an object with a `produce` function plus optional knobs:
 | field | type | default | notes |
 |---|---|---|---|
 | `produce` | `(env) => string \| Promise<string>` | required | Receives the merged static-variables map. |
-| `cacheable` | boolean | `false` | If true, the value is cached on disk. |
+| `cacheable` | boolean | `false` | If true, the value is cached in `.hurlman.db`. |
 | `ttlMs` | number | `3600000` | Cache age limit. Use `Infinity` to cache indefinitely. |
 | `validator` | `(value) => boolean` | undefined | Optional second freshness check (e.g. JWT not expired). False → re-produce. |
 | `secret` | boolean | `false` | If true, injected as `--secret` (redacted in hurl's verbose output). |
 | `fingerprint` | `(env) => string` | `() => ''` | Cache-key suffix from inputs. Critical when the same setter runs against different inputs. |
 
-## Cache
+## Token/setter cache
 
-Cache is stored at `.cache.json` in the project root (override via `HURLMAN_CACHE_PATH`). Add it to your `.gitignore`.
+Cached setter values are stored in `.hurlman.db` (SQLite) in the project root. Override the path with `HURLMAN_CACHE_PATH`. Add `.hurlman.db` to your `.gitignore`.
 
 ```bash
-npx hurlman cache list             # show keys + timestamps (no values)
-npx hurlman cache invalidate <key> # remove one entry
-npx hurlman cache clear            # wipe all
-npx hurlman run --refresh -- ...   # bypass cache for this run (writes back)
+npx hurlman cache list              # show keys + timestamps (no values)
+npx hurlman cache invalidate <key>  # remove one entry
+npx hurlman cache clear --setters   # wipe only setter/token entries
+npx hurlman run --refresh -- ...    # bypass cache for this run (writes back)
 ```
+
+## HTTP response cache
+
+Hurlman can optionally spawn a local HTTPS proxy before each hurl invocation. When active, the proxy intercepts all requests, returns cached responses on repeat calls, and stores new responses for future runs. Enable it via `hurlman.json`:
+
+```json
+{
+  "proxy": {
+    "enabled": true,
+    "ttlMs": 28800000
+  }
+}
+```
+
+Per-run overrides:
+
+```bash
+npx hurlman run --cache -- foo.hurl     # enable for this run
+npx hurlman run --no-cache -- foo.hurl  # disable for this run
+```
+
+Cache key: `METHOD::URL::SHA256(body)`. Auth headers (`Authorization`, `X-Auth-Token`, `X-API-Key`, `Cookie`) are excluded from the key so token rotation doesn't invalidate cached responses.
+
+Managing response cache entries:
+
+```bash
+npx hurlman cache clear                           # wipe everything (responses + setters)
+npx hurlman cache clear --responses               # wipe all response entries
+npx hurlman cache clear --responses api.example.com  # wipe responses matching URL substring
+npx hurlman cache clear --setters                 # wipe only setter/token entries
+```
+
+### `hurlman.json` options
+
+| key | type | default | notes |
+|---|---|---|---|
+| `proxy.enabled` | boolean | `false` | Start the proxy on `run` |
+| `proxy.url` | string | auto | Override the proxy address (e.g. for a fixed port) |
+| `proxy.ttlMs` | number \| null | `28800000` | Response TTL in ms. `null` = never expire. |
 
 ## TypeScript users
 

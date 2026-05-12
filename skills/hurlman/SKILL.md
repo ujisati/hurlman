@@ -4,13 +4,13 @@ description: >
   Use this skill whenever you are working in a project that uses hurlman — signs include an `envs/` directory
   (especially `envs/default.js`), `.hurl` files, or `hurlman` in `package.json` dependencies. Use it when the
   user wants to run hurl files, add or edit env variables or setters, compose environments, debug variable
-  injection, or manage the cache. Even if the user just says "run the hurl file" or "add an env var", use this
-  skill — don't try to invoke hurl directly without it in a hurlman project.
+  injection, manage the cache, or configure the HTTP proxy cache. Even if the user just says "run the hurl file"
+  or "add an env var", use this skill — don't try to invoke hurl directly without it in a hurlman project.
 ---
 
 # Hurlman
 
-Hurlman is a thin CLI wrapper around [hurl](https://hurl.dev/) that adds environment composition and computed-variable injection with persistent caching. Hurl owns all output; hurlman only injects variables and manages the cache.
+Hurlman is a thin CLI wrapper around [hurl](https://hurl.dev/) that adds environment composition, computed-variable injection with persistent caching, and an optional transparent HTTP proxy cache that replays prior API responses. Hurl owns all output; hurlman only injects variables, manages the cache, and optionally intercepts HTTP traffic.
 
 - Hurl docs: https://hurl.dev/docs/manual.html
 - Unsure about a hurl flag? Run `hurl -h`
@@ -22,7 +22,8 @@ Hurlman may be invoked as `hurlman` (global install) or `npx hurlman` (local/dev
 
 - `envs/default.js` (required — always loads first)
 - `.hurl` files anywhere in the project
-- `.cache.json` (gitignored, created on first cached setter run)
+- `.hurlman.db` (gitignored, SQLite cache created on first use)
+- `hurlman.json` (optional config for proxy settings)
 
 ## Running Hurl Files
 
@@ -32,6 +33,13 @@ Hurlman flags go before `--`; everything after `--` is forwarded verbatim to hur
 hurlman run -- foo.hurl
 hurlman run --env staging -- foo.hurl --test
 hurlman run -- foo.hurl --very-verbose --error-format long --report-html out/
+```
+
+Enable or disable the HTTP response cache for a single run:
+
+```bash
+hurlman run --cache -- foo.hurl     # enable proxy cache for this run
+hurlman run --no-cache -- foo.hurl  # disable proxy cache for this run
 ```
 
 ## Env Files
@@ -73,13 +81,39 @@ hurlman env
 hurlman env --env staging
 ```
 
-## Cache Management
+## Token/Setter Cache
+
+Cached setter values live in `.hurlman.db` (SQLite) at the project root. Override with `HURLMAN_CACHE_PATH`.
 
 ```bash
 hurlman cache list              # show keys + timestamps (no values)
 hurlman cache invalidate <key>  # remove one entry
-hurlman cache clear             # wipe all
+hurlman cache clear --setters   # wipe only setter/token entries
 hurlman run --refresh -- ...    # bypass cache for this run (writes back)
 ```
 
-Cache lives at `.cache.json` in the project root. Override with `HURLMAN_CACHE_PATH`.
+## HTTP Proxy Cache
+
+When enabled, hurlman spawns a local HTTPS proxy that caches HTTP request/response pairs in `.hurlman.db`. Repeat runs return cached responses without hitting the real API.
+
+Configure via `hurlman.json` in the project root:
+
+```json
+{
+  "proxy": {
+    "enabled": true,
+    "ttlMs": 28800000
+  }
+}
+```
+
+Cache key: `METHOD::URL::SHA256(body)`. Auth headers are excluded from the key so token rotation doesn't invalidate cached responses. `--insecure` is auto-injected into hurl when the proxy is active.
+
+Managing response cache entries:
+
+```bash
+hurlman cache clear                              # wipe everything
+hurlman cache clear --responses                  # wipe all response entries
+hurlman cache clear --responses api.example.com  # wipe responses matching URL substring
+hurlman cache clear --setters                    # wipe only setter/token entries
+```

@@ -18,6 +18,25 @@ export interface CacheEntry {
   cachedAt: string;
 }
 
-export interface CacheFile {
-  [key: string]: CacheEntry;
+export interface ResponseCacheEntry {
+  key: string;
+  method: string;
+  url: string;
+  statusCode: number;
+  responseHeaders: Record<string, string>;
+  responseBody: Buffer;
+  cachedAt: string;
+}
+
+export interface HurlmanConfig {
+  proxy: {
+    enabled: boolean;
+    url?: string;
+    ttlMs: number | null;
+  };
+}
+
+export interface ProxyHandle {
+  address: string;
+  stop: () => Promise<void>;
 }

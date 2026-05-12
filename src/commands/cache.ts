@@ -1,6 +1,11 @@
-import { listEntries, clearCache, deleteEntry } from '../lib/cache-engine.js';
+import { listEntries, clearCache, clearSetters, deleteEntry } from '../lib/cache-engine.js';
+import { clearResponses } from '../lib/response-cache.js';
 
-export function cacheCommand(action: string, key?: string): void {
+export function cacheCommand(
+  action: string,
+  key?: string,
+  opts?: { responses?: boolean; setters?: boolean; pattern?: string },
+): void {
   switch (action) {
     case 'list': {
       const entries = listEntries();
@@ -14,8 +19,20 @@ export function cacheCommand(action: string, key?: string): void {
       return;
     }
     case 'clear': {
-      clearCache();
-      console.log('Cache cleared');
+      const { responses = false, setters = false, pattern } = opts ?? {};
+      if (!responses && !setters) {
+        clearCache();
+        console.log('Cache cleared');
+      } else {
+        if (responses) {
+          clearResponses(pattern);
+          console.log(pattern ? `Response cache cleared (url ~ "${pattern}")` : 'Response cache cleared');
+        }
+        if (setters) {
+          clearSetters();
+          console.log('Setter cache cleared');
+        }
+      }
       return;
     }
     case 'invalidate': {

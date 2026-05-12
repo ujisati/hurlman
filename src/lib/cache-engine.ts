@@ -1,66 +1,53 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import type { CacheEntry, CacheFile } from '../types.js';
-
-let cachePathOverride: string | undefined;
+import type { CacheEntry } from '../types.js';
+import { getDb, getDbPath, setDbPath } from './db.js';
+import { clearResponses } from './response-cache.js';
 
 export function setCachePath(p: string): void {
-  cachePathOverride = p;
+  setDbPath(p);
 }
 
 export function getCachePath(): string {
-  if (cachePathOverride) return cachePathOverride;
-  if (process.env.HURLMAN_CACHE_PATH) return process.env.HURLMAN_CACHE_PATH;
-  return path.resolve(process.cwd(), '.cache.json');
-}
-
-function readCacheFile(): CacheFile {
-  const p = getCachePath();
-  if (!fs.existsSync(p)) return {};
-  const raw = fs.readFileSync(p, 'utf-8');
-  return JSON.parse(raw) as CacheFile;
-}
-
-function writeCacheFile(cache: CacheFile): void {
-  const p = getCachePath();
-  fs.writeFileSync(p, JSON.stringify(cache, null, 2), 'utf-8');
+  return getDbPath();
 }
 
 export function getEntry(key: string): CacheEntry | undefined {
-  const cache = readCacheFile();
-  return cache[key];
+  const row = getDb()
+    .prepare('SELECT value, cached_at FROM token_cache WHERE key = ?')
+    .get(key) as { value: string; cached_at: string } | undefined;
+  if (!row) return undefined;
+  return { value: row.value, cachedAt: row.cached_at };
 }
 
 export function setEntry(key: string, entry: CacheEntry): void {
-  const cache = readCacheFile();
-  cache[key] = entry;
-  writeCacheFile(cache);
+  getDb()
+    .prepare('INSERT OR REPLACE INTO token_cache (key, value, cached_at) VALUES (?, ?, ?)')
+    .run(key, entry.value, entry.cachedAt);
 }
 
 export function deleteEntry(key: string): boolean {
-  const cache = readCacheFile();
-  if (!(key in cache)) return false;
-  delete cache[key];
-  writeCacheFile(cache);
-  return true;
+  const result = getDb()
+    .prepare('DELETE FROM token_cache WHERE key = ?')
+    .run(key);
+  return result.changes > 0;
+}
+
+export function clearSetters(): void {
+  getDb().prepare('DELETE FROM token_cache').run();
 }
 
 export function clearCache(): void {
-  writeCacheFile({});
+  clearSetters();
+  clearResponses();
 }
 
 export function listEntries(): { key: string; cachedAt: string }[] {
-  const cache = readCacheFile();
-  return Object.entries(cache).map(([key, entry]) => ({
-    key,
-    cachedAt: entry.cachedAt,
-  }));
+  const rows = getDb()
+    .prepare('SELECT key, cached_at FROM token_cache ORDER BY key')
+    .all() as { key: string; cached_at: string }[];
+  return rows.map((r) => ({ key: r.key, cachedAt: r.cached_at }));
 }
 
-export function deriveKey(
-  varName: string,
-  fingerprint: string,
-): string {
+export function deriveKey(varName: string, fingerprint: string): string {
   return `${varName}::${fingerprint}`;
 }
 

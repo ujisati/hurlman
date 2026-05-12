@@ -27,6 +27,8 @@ program
   .option('--env <name>', 'Environment to load (repeatable)', collect, [] as string[])
   .option('--envs-dir <path>', 'Path to envs directory')
   .option('--refresh', 'Force re-produce of cacheable setters; updates the cache')
+  .option('--cache', 'Enable HTTP proxy cache for this run (overrides hurlman.json)')
+  .option('--no-cache', 'Disable HTTP proxy cache for this run (overrides hurlman.json)')
   .action((hurlArgs: string[], opts) => {
     if (!hurlArgs || hurlArgs.length === 0) {
       process.stderr.write(
@@ -40,6 +42,7 @@ program
       hurlArgs,
       envsDir: opts.envsDir,
       refresh: opts.refresh,
+      cache: opts.cache as boolean | undefined,
     });
   });
 
@@ -57,17 +60,21 @@ const cache = program
 
 cache
   .command('list')
-  .description('List all cache keys and their timestamps')
+  .description('List all token/setter cache keys and their timestamps')
   .action(() => cacheCommand('list'));
 
 cache
-  .command('clear')
-  .description('Wipe the entire cache')
-  .action(() => cacheCommand('clear'));
+  .command('clear [pattern]')
+  .description('Wipe the cache. No flags = everything; --responses / --setters to scope.')
+  .option('--responses', 'Wipe only HTTP response cache entries (optional URL substring pattern)')
+  .option('--setters', 'Wipe only token/setter cache entries')
+  .action((pattern: string | undefined, opts: { responses?: boolean; setters?: boolean }) =>
+    cacheCommand('clear', undefined, { ...opts, pattern }),
+  );
 
 cache
   .command('invalidate <key>')
-  .description('Remove a single cache entry by key')
+  .description('Remove a single token/setter cache entry by key')
   .action((key: string) => cacheCommand('invalidate', key));
 
 program.parse();

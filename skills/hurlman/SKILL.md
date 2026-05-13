@@ -94,7 +94,7 @@ hurlman run --refresh -- ...    # bypass cache for this run (writes back)
 
 ## HTTP Proxy Cache
 
-When enabled, hurlman spawns a local HTTPS proxy that caches HTTP request/response pairs in `.hurlman.db`. Repeat runs return cached responses without hitting the real API.
+When enabled, hurlman spawns a local HTTPS proxy that memoizes **successful (2xx)** responses from a hurl flow into `.hurlman.db`. On re-runs, prior 2xx steps replay from the database; non-2xx and uncached steps re-execute against the real API. All methods are cached on 2xx (including POSTs — required for ID-chaining workflows). Once recorded, re-runs do not hit the real backend; clear the cache to force a fresh round-trip.
 
 Configure via `hurlman.json` in the project root:
 
@@ -107,7 +107,7 @@ Configure via `hurlman.json` in the project root:
 }
 ```
 
-Cache key: `METHOD::URL::SHA256(body)`. Auth headers are excluded from the key so token rotation doesn't invalidate cached responses. `--insecure` is auto-injected into hurl when the proxy is active.
+Cache key: `METHOD::URL::SHA256(body)`. Request headers are not part of the key, so auth token rotation doesn't invalidate cached responses. `--insecure` is auto-injected into hurl when the proxy is active.
 
 Managing response cache entries:
 

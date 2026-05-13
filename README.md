@@ -136,7 +136,16 @@ npx hurlman run --refresh -- ...    # bypass cache for this run (writes back)
 
 ## HTTP response cache
 
-Hurlman can optionally spawn a local HTTPS proxy before each hurl invocation. When active, the proxy intercepts all requests, returns cached responses on repeat calls, and stores new responses for future runs. Enable it via `hurlman.json`:
+Hurlman can optionally spawn a local HTTPS proxy before each hurl invocation to **memoize successful responses from a hurl flow**. On a first run it records, on subsequent runs it replays — failed or uncached steps re-execute against the real API, prior successful steps are served from the database. Think of it as step memoization for a request flow, not a generic HTTP cache.
+
+What gets cached:
+
+- **Only 2xx responses.** 3xx, 4xx, 5xx pass through unchanged but are never persisted, so a failing step always retries against the real API on the next run.
+- **All HTTP methods** — including POST/PUT/PATCH/DELETE. This is required so that chained workflows (a POST that returns an `id`, then a GET against that `id`) stay self-consistent across re-runs.
+
+A corollary worth knowing: once a flow has been recorded successfully, re-runs do not hit the real backend at all. That's the point — but it means side effects (real rows in the DB, etc.) are not re-applied. Use `hurlman cache clear --responses [pattern]` to force a fresh round-trip when you want one.
+
+Enable it via `hurlman.json`:
 
 ```json
 {
@@ -154,7 +163,7 @@ npx hurlman run --cache -- foo.hurl     # enable for this run
 npx hurlman run --no-cache -- foo.hurl  # disable for this run
 ```
 
-Cache key: `METHOD::URL::SHA256(body)`. Auth headers (`Authorization`, `X-Auth-Token`, `X-API-Key`, `Cookie`) are excluded from the key so token rotation doesn't invalidate cached responses.
+Cache key: `METHOD::URL::SHA256(body)`. Request headers are not part of the key, so auth token rotation doesn't invalidate cached responses.
 
 Managing response cache entries:
 

@@ -250,10 +250,13 @@ cache_api:
 
 http_proxy_cache:
   intent: >-
-    Hurlman optionally spawns a local HTTP proxy before each hurl invocation
-    and injects --proxy <address> (and --insecure) transparently. Hurl is
-    unaware. Setup calls cached from a prior run return immediately without
-    hitting the real API. The proxy tears down cleanly after hurl exits.
+    Memoize successful responses from a hurl flow so subsequent runs replay
+    them without hitting the real API. On re-run, failed or uncached steps
+    re-execute; successful prior steps are served from the database. Once a
+    flow has been recorded successfully, runs are pure replay until
+    invalidated. Hurlman spawns a local HTTP proxy before each hurl
+    invocation and injects --proxy <address> and --insecure transparently;
+    hurl itself is unaware. The proxy tears down cleanly after hurl exits.
   storage:
     database: >-
       Same .hurlman.db file as the token cache (or HURLMAN_CACHE_PATH
@@ -268,11 +271,21 @@ http_proxy_cache:
         response_body    BLOB NOT NULL,
         cached_at        TEXT NOT NULL       -- ISO timestamp
       )
-  key_derivation:
-    - "METHOD + \"::\" + URL + \"::\" + SHA256(request body; empty string if no body)"
+  caching_rule:
     - >-
-      Auth headers (Authorization, X-Auth-Token, X-API-Key, Cookie) are
-      excluded from the hash so a token rotation does not invalidate cached
+      Only 2xx responses are cached. 3xx, 4xx, and 5xx responses pass through
+      to the client unchanged but are not persisted — they re-execute against
+      the real API on every run.
+    - >-
+      All HTTP methods are cached on 2xx (including POST/PUT/PATCH/DELETE).
+      Caching mutating requests is required for ID-chaining workflows where
+      one request's response body feeds a later request's URL; replay must
+      remain self-consistent.
+  key_derivation:
+    - "METHOD + \"::\" + URL + \"::\" + SHA256(request body; empty buffer if no body)"
+    - >-
+      Request headers are not part of the cache key — only METHOD, URL, and
+      the body hash. Auth token rotation therefore does not invalidate cached
       responses.
   config:
     - "Controlled by hurlman.json (see hurlman_config section)."
@@ -293,18 +306,23 @@ http_proxy_cache:
     - >-
       A cached response is fresh if (now - cached_at) <= proxy.ttlMs, or if
       proxy.ttlMs is null (no expiry). Stale entries are treated as misses:
-      the real request goes through, the fresh response overwrites the entry.
+      the real request goes through and, if 2xx, the fresh response
+      overwrites the entry.
   replay:
     - >-
       Automatic on cache hit (fresh entry). No replay-mode flag. On miss or
-      stale entry, the real request goes through and the response is stored.
+      stale entry, the real request goes through and a 2xx response is stored.
   invalidation:
     - "hurlman cache clear              -- wipe all response + token cache entries"
     - "hurlman cache clear --responses  -- wipe only HTTP response entries"
     - "hurlman cache clear --responses <pattern> -- wipe response entries where url contains <pattern>"
     - "hurlman cache clear --setters    -- wipe only token/setter cache entries"
     - "Body change = automatic miss (SHA256 won't match)."
-    - "Token rotation = no invalidation needed (auth headers excluded from key)."
+    - "Token rotation = no invalidation needed (request headers are not in the key)."
+    - >-
+      Re-runs against a stateful backend never re-mutate the backend until
+      the cache is cleared. Use `hurlman cache clear --responses [pattern]`
+      to force a fresh round-trip.
 
 hurlman_config:
   file:
@@ -329,7 +347,12 @@ hurlman_config:
     proxy.ttlMs: >-
       number | null. How long a cached response is considered fresh, in
       milliseconds. Default: 28800000 (8 hours). null means entries never
-      expire. Responses past TTL are treated as misses and re-fetched.
+      expire. Responses past TTL are treated as misses and re-fetched. Note
+      that within a single flow, partial expiry can produce mixed-replay
+      runs (some entries fresh, others stale) which may leave a stateful
+      backend in an inconsistent state relative to the cached chain;
+      workaround is `hurlman cache clear --responses` to force a full
+      re-record.
   behavior:
     - "hurlman.json is parsed once at process start; malformed JSON → clear error + exit 1."
     - "Unknown keys are ignored (forward-compat)."
